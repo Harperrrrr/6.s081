@@ -8,6 +8,7 @@
 #include "spinlock.h"
 #include "riscv.h"
 #include "defs.h"
+#include "sysinfo.h"
 
 void freerange(void *pa_start, void *pa_end);
 
@@ -59,6 +60,7 @@ kfree(void *pa)
   acquire(&kmem.lock);
   r->next = kmem.freelist;
   kmem.freelist = r;
+  info_mem_change(PGSIZE);
   release(&kmem.lock);
 }
 
@@ -74,6 +76,7 @@ kalloc(void)
   r = kmem.freelist;
   if(r)
     kmem.freelist = r->next;
+  info_mem_change(-PGSIZE);
   release(&kmem.lock);
 
   if(r)

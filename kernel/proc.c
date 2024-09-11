@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "sysinfo.h"
 
 struct cpu cpus[NCPU];
 
@@ -106,6 +107,8 @@ allocproc(void)
 
 found:
   p->pid = allocpid();
+  p->trace_mask = 0;
+  info_proc_change(1);
 
   // Allocate a trapframe page.
   if((p->trapframe = (struct trapframe *)kalloc()) == 0){
@@ -151,6 +154,7 @@ freeproc(struct proc *p)
   p->xstate = 0;
   p->state = UNUSED;
   p->trace_mask = 0;
+  info_proc_change(-1);
 }
 
 // Create a user page table for a given process,
