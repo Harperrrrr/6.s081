@@ -19,6 +19,8 @@ extern void forkret(void);
 static void wakeup1(struct proc *chan);
 static void freeproc(struct proc *p);
 
+extern char etext[];  // kernel.ld sets this to end of kernel code.
+
 extern char trampoline[]; // trampoline.S
 
 // initialize the proc table at boot time.
@@ -115,11 +117,17 @@ found:
 
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
-  if(p->pagetable == 0){
+  // A kernel page table
+  p->kpagetable = proc_kpagetable(p);
+
+  if(p->pagetable == 0 || p->kpagetable == 0){
     freeproc(p);
     release(&p->lock);
     return 0;
   }
+
+  uint64 va = KSTACK((int) (p - proc));
+  mappages(p->kpagetable, va, PGSIZE, kvmpa(va), PTE_R | PTE_W);
 
   // Set up new context to start executing at forkret,
   // which returns to user space.
@@ -141,6 +149,9 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  // i wonder if unmap is necessary
+  if(p->kpagetable)
+    kpgtblfree(p->kpagetable);
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -185,6 +196,60 @@ proc_pagetable(struct proc *p)
   return pagetable;
 }
 
+pagetable_t
+proc_kpagetable(struct proc *p){
+  pagetable_t kpagetable;
+  kpagetable = uvmcreate();
+  if(kpagetable == 0){
+    return 0;
+  }
+
+  // uart registers
+  if(mappages(kpagetable, UART0, PGSIZE, UART0, PTE_R | PTE_W) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // virtio mmio disk interface
+  if(mappages(kpagetable, VIRTIO0, PGSIZE, VIRTIO0, PTE_R | PTE_W) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // CLINT
+  if(mappages(kpagetable, CLINT, 0x10000, CLINT, PTE_R | PTE_W) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // PLIC
+  if(mappages(kpagetable, PLIC, 0x400000, PLIC, PTE_R | PTE_W) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // map kernel text executable and read-only.
+  if(mappages(kpagetable, KERNBASE, (uint64)etext-KERNBASE, KERNBASE, PTE_R | PTE_X) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // map kernel data and the physical RAM we'll make use of.
+  if(mappages(kpagetable, (uint64)etext, PHYSTOP-(uint64)etext, (uint64)etext, PTE_R | PTE_W) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  // map the trampoline for trap entry/exit to
+  // the highest virtual address in the kernel.
+  if(mappages(kpagetable, TRAMPOLINE, PGSIZE, (uint64)trampoline, PTE_R | PTE_X) != 0){
+    uvmfree(kpagetable, 0);
+    return 0;
+  }
+
+  return kpagetable;
+}
+
 // Free a process's page table, and free the
 // physical memory it refers to.
 void
@@ -218,7 +283,8 @@ userinit(void)
   
   // allocate one user page and copy init's instructions
   // and data into it.
-  uvminit(p->pagetable, initcode, sizeof(initcode));
+  // uvminit(p->pagetable, initcode, sizeof(initcode));
+  uvminit2(p->pagetable, p->kpagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
 
   // prepare for the very first "return" from kernel to user.
@@ -242,12 +308,18 @@ growproc(int n)
   struct proc *p = myproc();
 
   sz = p->sz;
+  if((sz + n) > PLIC){
+    return -1;
+  }
+
   if(n > 0){
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    copypgtbl(p->pagetable, p->kpagetable, p->sz, sz);
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    copypgtbl(p->pagetable, p->kpagetable, sz, p->sz);
   }
   p->sz = sz;
   return 0;
@@ -268,7 +340,7 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p, np, p->sz) < 0){
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -473,12 +545,15 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        w_satp(MAKE_SATP(p->kpagetable));
+        sfence_vma();
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-
+        
+        kvminithart();
         found = 1;
       }
       release(&p->lock);
@@ -486,6 +561,7 @@ scheduler(void)
 #if !defined (LAB_FS)
     if(found == 0) {
       intr_on();
+      kvminithart();
       asm volatile("wfi");
     }
 #else

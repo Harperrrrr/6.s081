@@ -2129,6 +2129,7 @@ sbrkfail(char *s)
       read(fds[0], &scratch, 1);
   }
 
+  printf("ok i know\n");
   // if those failed allocations freed up the pages they did allocate,
   // we'll be able to allocate here
   c = sbrk(PGSIZE);
@@ -2142,6 +2143,7 @@ sbrkfail(char *s)
     printf("%s: failed sbrk leaked memory\n", s);
     exit(1);
   }
+
 
   // test running fork with the above allocated page 
   pid = fork();
@@ -2650,7 +2652,7 @@ main(int argc, char *argv[])
     {reparent2, "reparent2"},
     {pgbug, "pgbug" },
     {sbrkbugs, "sbrkbugs" },
-    // {badwrite, "badwrite" },
+    {badwrite, "badwrite" },
     {badarg, "badarg" },
     {reparent, "reparent" },
     {twochildren, "twochildren"},
