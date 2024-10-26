@@ -1,5 +1,6 @@
 struct buf {
   int valid;   // has data been read from disk?
+  uint timestamp;
   int disk;    // does disk "own" buf?
   uint dev;
   uint blockno;

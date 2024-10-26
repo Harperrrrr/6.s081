@@ -60,10 +60,11 @@ initlock(struct spinlock *lk, char *name)
 // Loops (spins) until the lock is acquired.
 void
 acquire(struct spinlock *lk)
-{
+{ 
   push_off(); // disable interrupts to avoid deadlock.
-  if(holding(lk))
+  if(holding(lk)){
     panic("acquire");
+  }
 
 #ifdef LAB_LOCK
     __sync_fetch_and_add(&(lk->n), 1);
@@ -94,7 +95,7 @@ acquire(struct spinlock *lk)
 // Release the lock.
 void
 release(struct spinlock *lk)
-{
+{ 
   if(!holding(lk))
     panic("release");
 
